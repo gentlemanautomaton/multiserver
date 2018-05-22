@@ -14,17 +14,20 @@ func Example() {
 	// Prepare server A
 	s1 := &http.Server{
 		Addr:    ":8080",
-		Handler: http.HandlerFunc(one),
+		Handler: respondWith("one"),
 	}
 
 	// Prepare server B
 	s2 := &http.Server{
 		Addr:    ":8081",
-		Handler: http.HandlerFunc(two),
+		Handler: respondWith("two"),
 	}
 
 	// Prepare the group
 	s := multiserver.New(s1, s2)
+
+	// If a server dies unexpectedly, give the others one second to
+	// gracefully shut down.
 	s.Option(multiserver.ShutdownTimeout(time.Second))
 
 	// Start the servers
@@ -37,7 +40,7 @@ func Example() {
 	fmt.Println(query("http://localhost:8080/"))
 	fmt.Println(query("http://localhost:8081/"))
 
-	// Tell the server to perform a graceful shutdown
+	// Tell the servers to perform a graceful shutdown without any timeout
 	s.Shutdown(context.Background())
 
 	// Output:
@@ -45,12 +48,10 @@ func Example() {
 	// two
 }
 
-func one(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprint(w, "one")
-}
-
-func two(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprint(w, "two")
+func respondWith(value string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprint(w, value)
+	}
 }
 
 func query(url string) string {
