@@ -28,7 +28,9 @@ func (g *Group) Option(opts ...Option) {
 	}
 }
 
-// ListenAndServe starts all servers within the group.
+// ListenAndServe starts all servers within the group by calling their
+// ListenAndServe function. It returns only when each of these calls
+// have returned.
 func (g *Group) ListenAndServe() error {
 	if g.transition(stopped, started) {
 		return g.execute(func(s Server) error {
@@ -40,7 +42,14 @@ func (g *Group) ListenAndServe() error {
 	return errors.New("server has already started")
 }
 
-// Shutdown initiates a graceful shutdown of all servers within the group.
+// Shutdown initiates a graceful shutdown of all servers within the group
+// without interrupting any active connections. If the provided context
+// expires before the shutdown is complete, Shutdown returns the context's
+// error, otherwise it returns any error returned from closing the underlying
+// net.Listener(s).
+//
+// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
+// Make sure the program doesn't exit and waits instead for Shutdown to return.
 func (g *Group) Shutdown(ctx context.Context) error {
 	if g.transition(started, stopping) {
 		defer g.transition(stopping, stopped)
@@ -49,7 +58,7 @@ func (g *Group) Shutdown(ctx context.Context) error {
 		})
 	}
 
-	return errors.New("server is already shutting down")
+	return errors.New("server is already stopped or shutting down")
 }
 
 type task func(Server) error
