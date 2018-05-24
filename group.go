@@ -31,15 +31,63 @@ func (g *Group) Option(opts ...Option) {
 // ListenAndServe starts all servers within the group by calling their
 // ListenAndServe function. It returns only when each of these calls
 // have returned.
+//
+// If the group has already been started ErrGroupStarted will be returned
+// immediately.
 func (g *Group) ListenAndServe() error {
 	if g.transition(stopped, started) {
 		return g.execute(func(s Server) error {
-			defer g.cancel()
 			return s.ListenAndServe()
-		})
+		}, g.cancel)
 	}
 
-	return errors.New("server has already started")
+	return ErrGroupStarted
+}
+
+// ListenAndServeContext starts all servers within the group by calling their
+// ListenAndServe function. It returns only when each of these calls
+// have returned.
+//
+// If the group has already been started ErrGroupStarted will be returned
+// immediately.
+//
+// Cancellation of the given context will result in a graceful shutdown of
+// all servers. The amount of time allowed for each server to gracefully
+// shutdown will be limited by the shutdown timeout of the group.
+func (g *Group) ListenAndServeContext(ctx context.Context) error {
+	if g.transition(stopped, started) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		var (
+			started sync.WaitGroup
+			result  = make(chan error)
+		)
+
+		started.Add(len(g.servers))
+
+		go func() {
+			defer close(result)
+			result <- g.execute(func(s Server) error {
+				go func() {
+					time.Sleep(5 * time.Millisecond)
+					started.Done()
+				}()
+				return s.ListenAndServe()
+			}, g.cancel)
+		}()
+
+		started.Wait()
+
+		go func() {
+			<-ctx.Done()
+			g.cancel()
+		}()
+
+		return <-result
+	}
+
+	return ErrGroupStarted
 }
 
 // Shutdown initiates a graceful shutdown of all servers within the group
@@ -55,7 +103,7 @@ func (g *Group) Shutdown(ctx context.Context) error {
 		defer g.transition(stopping, stopped)
 		return g.execute(func(s Server) error {
 			return s.Shutdown(ctx)
-		})
+		}, nil)
 	}
 
 	return errors.New("server is already stopped or shutting down")
@@ -63,35 +111,30 @@ func (g *Group) Shutdown(ctx context.Context) error {
 
 type task func(Server) error
 
-func (g *Group) execute(t task) error {
+func (g *Group) execute(t task, then func()) error {
 	var (
-		results = make([]error, len(g.servers))
-		wg      sync.WaitGroup
+		wg sync.WaitGroup
+		c  collector
 	)
 
 	// Prepare the waitgroup
 	wg.Add(len(g.servers))
 
-	// Start the servers
-	for i, server := range g.servers {
-		go func(wg *sync.WaitGroup, server Server, result *error) {
+	// Run the task for each server, and its followup if provided
+	for _, server := range g.servers {
+		go func(server Server) {
 			defer wg.Done()
-			*result = t(server)
-		}(&wg, server, &results[i])
+			if then != nil {
+				defer then()
+			}
+			c.Apply(t(server))
+		}(server)
 	}
 
-	// Wait until all of the shutdown has completed or timed out for all
-	// of the servers
+	// Wait until all of the tasks have completed
 	wg.Wait()
 
-	// Return the first non-nil result
-	for _, err := range results {
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return c.Result()
 }
 
 func (g *Group) transition(from, to status) bool {
