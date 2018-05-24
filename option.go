@@ -10,7 +10,8 @@ const DefaultShutdownTimeout = time.Second * 3
 type Option func(s *Group)
 
 // ShutdownTimeout defines the amount of time alloted for a group of servers
-// to gracefully shutdown when one of their peers stops unexpectedly.
+// to gracefully shutdown when one of their peers stops unexpectedly or the
+// context is cancelled in ListenAndServeContext.
 //
 // If group.Shutdown() is called directly this value will be ignored.
 func ShutdownTimeout(timeout time.Duration) Option {
